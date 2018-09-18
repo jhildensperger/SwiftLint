@@ -104,47 +104,132 @@ struct RulesOptions: OptionsProtocol {
 
 // MARK: - SwiftyTextTable
 
-extension TextTable {
-    init(ruleList: RuleList, configuration: Configuration) {
-        let columns = [
-            TextTableColumn(header: "identifier"),
-            TextTableColumn(header: "opt-in"),
-            TextTableColumn(header: "correctable"),
-            TextTableColumn(header: "enabled in your config"),
-            TextTableColumn(header: "kind"),
-            TextTableColumn(header: "analyzer"),
-            TextTableColumn(header: "configuration")
+protocol ConsoleDescription {
+    var description: RuleDescription { get }
+    var consoleDescription: String { get }
+    
+    var isOptInRule: Bool { get }
+    var isCorrectableRule: Bool { get }
+    var isConfiguredRule: Bool { get }
+    var isAnalyzerRule: Bool { get }
+}
+
+extension ConsoleDescription {
+    var values: [String] {
+        return [
+            description.identifier,
+            isOptInRule ? "yes" : "no",
+            isCorrectableRule ? "yes" : "no",
+            isConfiguredRule ? "yes" : "no",
+            description.kind.rawValue,
+            isAnalyzerRule ? "yes" : "no",
+            truncated(consoleDescription)
         ]
-        self.init(columns: columns)
-        let sortedRules = ruleList.list.sorted { $0.0 < $1.0 }
-        func truncate(_ string: String) -> String {
-            let stringWithNoNewlines = string.replacingOccurrences(of: "\n", with: "\\n")
-            let minWidth = "configuration".count - "...".count
-            let configurationStartColumn = 112
-            let truncatedEndIndex = stringWithNoNewlines.index(
-                stringWithNoNewlines.startIndex,
-                offsetBy: max(minWidth, Terminal.currentWidth() - configurationStartColumn),
-                limitedBy: stringWithNoNewlines.endIndex
-            )
-            if let truncatedEndIndex = truncatedEndIndex {
-                return stringWithNoNewlines[..<truncatedEndIndex] + "..."
-            }
-            return stringWithNoNewlines
+    }
+    
+    private func truncated(_ string: String) -> String {
+        let stringWithNoNewlines = string.replacingOccurrences(of: "\n", with: "\\n")
+        let minWidth = "configuration".count - "...".count
+        let configurationStartColumn = 112
+        let truncatedEndIndex = stringWithNoNewlines.index(
+            stringWithNoNewlines.startIndex,
+            offsetBy: max(minWidth, Terminal.currentWidth() - configurationStartColumn),
+            limitedBy: stringWithNoNewlines.endIndex
+        )
+        if let truncatedEndIndex = truncatedEndIndex {
+            return stringWithNoNewlines[..<truncatedEndIndex] + "..."
         }
-        for (ruleID, ruleType) in sortedRules {
-            let rule = ruleType.init()
-            let configuredRule = configuration.rules.first { rule in
-                return type(of: rule).description.identifier == ruleID
+        return stringWithNoNewlines
+    }
+}
+
+struct RuleConsoleDescription: ConsoleDescription {
+    let rule: Rule
+    var configuredRule: Rule?
+    var customRuleConfigurations: [RegexConfiguration]? = nil
+    
+    init(rule: Rule, ruleID: String, configuration: Configuration) {
+        self.rule = rule
+        
+        configuredRule = configuration.rules.first { rule in
+            return type(of: rule).description.identifier == ruleID
+        }
+        
+        if let customRules = configuredRule as? CustomRules {
+            customRuleConfigurations = customRules.configuration.customRuleConfigurations
+        }
+    }
+
+    var description: RuleDescription {
+        return type(of: rule).description
+    }
+    
+    var consoleDescription: String {
+        return (configuredRule ?? rule).configurationDescription
+    }
+
+    var isOptInRule: Bool {
+        return rule is OptInRule
+    }
+
+    var isCorrectableRule: Bool {
+        return rule is CorrectableRule
+    }
+
+    var isConfiguredRule: Bool {
+        return configuredRule != nil
+    }
+
+    var isAnalyzerRule: Bool {
+        return rule is AnalyzerRule
+    }
+}
+
+extension RegexConfiguration: ConsoleDescription {
+    var isOptInRule: Bool {
+        return false
+    }
+
+    var isCorrectableRule: Bool {
+        return false
+    }
+
+    var isConfiguredRule: Bool {
+        return true
+    }
+
+    var isAnalyzerRule: Bool {
+        return false
+    }
+}
+
+extension TextTable {
+    static let columns = [
+        TextTableColumn(header: "identifier"),
+        TextTableColumn(header: "opt-in"),
+        TextTableColumn(header: "correctable"),
+        TextTableColumn(header: "enabled in your config"),
+        TextTableColumn(header: "kind"),
+        TextTableColumn(header: "analyzer"),
+        TextTableColumn(header: "configuration")
+    ]
+
+    init(ruleList: RuleList, configuration: Configuration) {
+        self.init(columns: TextTable.columns)
+        var ruleConsoleDescriptions = [ConsoleDescription]()
+            
+        for (ruleID, ruleType) in ruleList.list {
+            let ruleConsoleDescription = RuleConsoleDescription(rule: ruleType.init(), ruleID: ruleID, configuration: configuration)
+            
+            if let customRuleConfigurations = ruleConsoleDescription.customRuleConfigurations {
+                ruleConsoleDescriptions.append(contentsOf: customRuleConfigurations)
+            } else {
+                ruleConsoleDescriptions.append(ruleConsoleDescription)
             }
-            addRow(values: [
-                ruleID,
-                (rule is OptInRule) ? "yes" : "no",
-                (rule is CorrectableRule) ? "yes" : "no",
-                configuredRule != nil ? "yes" : "no",
-                ruleType.description.kind.rawValue,
-                (rule is AnalyzerRule) ? "yes" : "no",
-                truncate((configuredRule ?? rule).configurationDescription)
-            ])
+        }
+
+        for ruleConsoleDescription in ruleConsoleDescriptions.sorted(by: { $0.description.identifier < $1.description.identifier }) {
+            addRow(values: ruleConsoleDescription.values)
         }
     }
 }
